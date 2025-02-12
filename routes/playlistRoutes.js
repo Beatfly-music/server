@@ -18,4 +18,10 @@ router.post('/music/playlist.addTrack', authenticateToken, playlistController.ad
 // Remove a track from a playlist.
 router.delete('/music/playlist.removeTrack', authenticateToken, playlistController.removeTrackFromPlaylist);
 
+// Get all playlists.
+router.get('/music/playlists', authenticateToken, playlistController.getPlaylists);
+
+// Get a single playlist by ID.
+router.get('/music/playlist/:playlistId', authenticateToken, playlistController.getPlaylist);
+
 module.exports = router;

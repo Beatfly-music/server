@@ -92,3 +92,43 @@ exports.removeTrackFromPlaylist = async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 };
+
+exports.getPlaylists = async (req, res) => {
+  try {
+    const [playlists] = await pool.query('SELECT * FROM playlists WHERE user_id = ?', [req.user.id]);
+    res.json({ playlists });
+  } catch (error) {
+    console.error("Get playlists error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+// Get a single playlist with its tracks.
+exports.getPlaylist = async (req, res) => {
+  try {
+    const playlistId = req.params.playlistId;
+    // Get the playlist details (you may want to remove user_id check if playlists are public)
+    const [playlists] = await pool.query(
+      'SELECT * FROM playlists WHERE id = ? AND user_id = ?',
+      [playlistId, req.user.id]
+    );
+    if (playlists.length === 0) {
+      return res.status(404).json({ error: "Playlist not found or not owned by you." });
+    }
+    const playlist = playlists[0];
+
+    // Get all tracks in this playlist
+    const [tracks] = await pool.query(
+      `SELECT t.* 
+       FROM playlist_tracks pt 
+       JOIN tracks t ON pt.track_id = t.id 
+       WHERE pt.playlist_id = ?`,
+      [playlistId]
+    );
+    playlist.tracks = tracks;
+    res.json(playlist);
+  } catch (error) {
+    console.error("Get playlist error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};

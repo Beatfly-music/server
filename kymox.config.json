@@ -1,0 +1,25 @@
+{
+  "appName": "beatfly-backend", 
+  "version": "1.0.0",
+  "entry": "server.js",
+  "obfuscate": true,
+  "obfuscatorOptions": {
+    "compact": true,
+    "controlFlowFlattening": false,
+    "controlFlowFlatteningThreshold": 0.75
+  },
+  "buildTargets": [
+    "windows",
+    "linux",
+    "mac",
+    "single-js"
+  ],
+  "singleOutputJs": "dist/bundle.js",
+  "singleOutputTs": "dist/bundle-ts.js",
+  "windowsOutput": "dist/app_win.exe",
+  "linuxOutput": "dist/app_linux",
+  "macOutput": "dist/app_macos",
+  "packageZip": true,
+  "pkgAssets": [],
+  "rootDir": "/home/bluet/Documents/GitHub/server"
+}
