@@ -5,6 +5,24 @@ const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer'); // NEW: Import Nodemailer
 require('dotenv').config();
 
+/**
+ * Generate a unique random 10-digit number for the user ID.
+ * This function checks the database to ensure the ID does not already exist.
+ */
+const generateUniqueId = async () => {
+  let unique = false;
+  let id;
+  while (!unique) {
+    // Generate a random 10-digit number
+    id = Math.floor(100000 + Math.random() * 900000);
+    const [rows] = await pool.query('SELECT id FROM users WHERE id = ?', [id]);
+    if (rows.length === 0) {
+      unique = true;
+    }
+  }
+  return id;
+};
+
 exports.register = async (req, res) => {
   try {
     const { username, email, password } = req.body;
@@ -12,11 +30,15 @@ exports.register = async (req, res) => {
       return res.status(400).json({ error: "Username, email, and password are required." });
     }
     const hashedPassword = await bcrypt.hash(password, 10);
+    
+    // Generate a unique random ID for the new user
+    const uniqueId = await generateUniqueId();
+
     const [result] = await pool.query(
-      'INSERT INTO users (username, email, password) VALUES (?, ?, ?)',
-      [username, email, hashedPassword]
+      'INSERT INTO users (username, email, password, id) VALUES (?, ?, ?, ?)',
+      [username, email, hashedPassword, uniqueId]
     );
-    res.status(201).json({ message: "User registered successfully", userId: result.insertId });
+    res.status(201).json({ message: "User registered successfully", userId: uniqueId });
   } catch (error) {
     console.error("Registration error:", error);
     res.status(500).json({ error: error.sqlMessage || "Internal server error" });

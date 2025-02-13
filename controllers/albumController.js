@@ -21,6 +21,24 @@ function buildImageUrl(req, filePath) {
 }
 
 /**
+ * Helper function to generate a random 10-digit album ID
+ * that is unique within the albums table.
+ */
+const generateUniqueAlbumId = async () => {
+  let unique = false;
+  let id;
+  while (!unique) {
+    // Generate a random 10-digit number.
+    id = Math.floor(10000 + Math.random() * 90000);
+    const [rows] = await pool.query('SELECT id FROM albums WHERE id = ?', [id]);
+    if (rows.length === 0) {
+      unique = true;
+    }
+  }
+  return id;
+};
+
+/**
  * Public endpoint to retrieve an album by ID along with its associated tracks
  * and uploader information.
  */
@@ -98,12 +116,14 @@ exports.createAlbum = async (req, res) => {
     // Determine the explicit flag.
     const explicitFlag = isExplicit === 'true' || isExplicit === true ? 1 : 0;
     
-    // Insert album record into the database (including isExplicit).
-    const [albumResult] = await pool.query(
-      'INSERT INTO albums (title, artist, description, album_art, isExplicit, user_id) VALUES (?, ?, ?, ?, ?, ?)',
-      [title, artist, description || '', albumArtPath, explicitFlag, req.user.id]
+    // Generate a unique album ID.
+    const albumId = await generateUniqueAlbumId();
+    
+    // Insert album record into the database (including isExplicit and the generated album ID).
+    await pool.query(
+      'INSERT INTO albums (id, title, artist, description, album_art, isExplicit, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [albumId, title, artist, description || '', albumArtPath, explicitFlag, req.user.id]
     );
-    const albumId = albumResult.insertId;
     
     // Process uploaded track files.
     const trackFiles = req.files && req.files.tracks ? req.files.tracks : [];

@@ -1,15 +1,36 @@
 const pool = require('../utils/db');
 
+/**
+ * Helper function to generate a random 10-digit playlist ID
+ * that is unique within the playlists table.
+ */
+const generateUniquePlaylistId = async () => {
+  let unique = false;
+  let id;
+  while (!unique) {
+    // Generate a random 10-digit number.
+    id = Math.floor(100000 + Math.random() * 90000);
+    const [rows] = await pool.query('SELECT id FROM playlists WHERE id = ?', [id]);
+    if (rows.length === 0) {
+      unique = true;
+    }
+  }
+  return id;
+};
+
 exports.createPlaylist = async (req, res) => {
   try {
     const { name, description, trackIds } = req.body;
     if (!name) return res.status(400).json({ error: "Playlist name is required." });
-    // Insert into playlists.
-    const [result] = await pool.query(
-      `INSERT INTO playlists (name, description, user_id) VALUES (?, ?, ?)`,
-      [name, description || '', req.user.id]
+    
+    // Generate a unique playlist ID.
+    const playlistId = await generateUniquePlaylistId();
+    
+    // Insert into playlists with the custom playlistId.
+    await pool.query(
+      `INSERT INTO playlists (id, name, description, user_id) VALUES (?, ?, ?, ?)`,
+      [playlistId, name, description || '', req.user.id]
     );
-    const playlistId = result.insertId;
     
     // Only insert into playlist_tracks if trackIds is provided and non-empty.
     if (trackIds && Array.isArray(trackIds) && trackIds.length > 0) {
@@ -26,12 +47,14 @@ exports.createPlaylist = async (req, res) => {
   }
 };
 
-
 exports.editPlaylist = async (req, res) => {
   try {
     const playlistId = req.params.playlistId;
     const { name, description } = req.body;
-    const [playlists] = await pool.query('SELECT * FROM playlists WHERE id = ? AND user_id = ?', [playlistId, req.user.id]);
+    const [playlists] = await pool.query(
+      'SELECT * FROM playlists WHERE id = ? AND user_id = ?',
+      [playlistId, req.user.id]
+    );
     if (playlists.length === 0)
       return res.status(404).json({ error: "Playlist not found or not owned by you." });
     await pool.query(
@@ -48,7 +71,10 @@ exports.editPlaylist = async (req, res) => {
 exports.deletePlaylist = async (req, res) => {
   try {
     const playlistId = req.params.playlistId;
-    const [playlists] = await pool.query('SELECT * FROM playlists WHERE id = ? AND user_id = ?', [playlistId, req.user.id]);
+    const [playlists] = await pool.query(
+      'SELECT * FROM playlists WHERE id = ? AND user_id = ?',
+      [playlistId, req.user.id]
+    );
     if (playlists.length === 0)
       return res.status(404).json({ error: "Playlist not found or not owned by you." });
     await pool.query('DELETE FROM playlists WHERE id = ?', [playlistId]);
@@ -62,7 +88,10 @@ exports.deletePlaylist = async (req, res) => {
 exports.addTrackToPlaylist = async (req, res) => {
   try {
     const { playlistId, trackId } = req.body;
-    const [playlists] = await pool.query('SELECT * FROM playlists WHERE id = ? AND user_id = ?', [playlistId, req.user.id]);
+    const [playlists] = await pool.query(
+      'SELECT * FROM playlists WHERE id = ? AND user_id = ?',
+      [playlistId, req.user.id]
+    );
     if (playlists.length === 0)
       return res.status(404).json({ error: "Playlist not found or not owned by you." });
     await pool.query(
@@ -79,7 +108,10 @@ exports.addTrackToPlaylist = async (req, res) => {
 exports.removeTrackFromPlaylist = async (req, res) => {
   try {
     const { playlistId, trackId } = req.body;
-    const [playlists] = await pool.query('SELECT * FROM playlists WHERE id = ? AND user_id = ?', [playlistId, req.user.id]);
+    const [playlists] = await pool.query(
+      'SELECT * FROM playlists WHERE id = ? AND user_id = ?',
+      [playlistId, req.user.id]
+    );
     if (playlists.length === 0)
       return res.status(404).json({ error: "Playlist not found or not owned by you." });
     await pool.query(
@@ -117,7 +149,7 @@ exports.getPlaylist = async (req, res) => {
     }
     const playlist = playlists[0];
 
-    // Get all tracks in this playlist
+    // Get all tracks in this playlist.
     const [tracks] = await pool.query(
       `SELECT t.* 
        FROM playlist_tracks pt 

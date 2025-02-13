@@ -32,7 +32,9 @@ exports.getUserProfile = async (req, res) => {
        WHERE u.id = ?`,
       [userId]
     );
-    if (rows.length === 0) return res.status(404).json({ error: "Profile not found" });
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Profile not found" });
+    }
     const profile = rows[0];
 
     // Convert the profile_pic to a public URL if available.
@@ -199,4 +201,3 @@ exports.updateArtistProfile = async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 };
-
