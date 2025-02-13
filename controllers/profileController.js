@@ -1,17 +1,19 @@
 const pool = require('../utils/db');
+const path = require('path');
 
 /**
- * Helper function that converts a local file path (stored in the database)
- * into a public URL using the image route.
- * 
+ * Helper function to build a public image URL.
+ * It removes the "uploads/" prefix from the stored file path and returns
+ * a URL using the image route.
+ *
  * For example, if filePath is:
- *    "uploads/albumArt/1739226278797-729899819-sample_album_art-cleaned.jpg"
+ *   "uploads/albumArt/1739226278797-729899819-sample_album_art-cleaned.jpg"
  * It returns:
- *    "http://localhost:5000/xrpc/images/albumArt/1739226278797-729899819-sample_album_art-cleaned.jpg"
+ *   "http://localhost:5000/xrpc/images/albumArt/1739226278797-729899819-sample_album_art-cleaned.jpg"
  */
 function buildImageUrl(req, filePath) {
   if (!filePath) return "";
-  // Remove any leading "uploads/" or "uploads\" and return a URL.
+  // Remove any leading "uploads/" or "uploads\"
   const relative = filePath.replace(/^uploads[\/\\]/, '');
   return `${req.protocol}://${req.get('host')}/xrpc/images/${relative}`;
 }
@@ -32,7 +34,8 @@ exports.getUserProfile = async (req, res) => {
     );
     if (rows.length === 0) return res.status(404).json({ error: "Profile not found" });
     const profile = rows[0];
-    // Convert the profile_pic to a public URL.
+
+    // Convert the profile_pic to a public URL if available.
     if (profile.profile_pic) {
       profile.profile_pic = buildImageUrl(req, profile.profile_pic);
     }
@@ -69,8 +72,7 @@ exports.updateUserProfile = async (req, res) => {
 
 /**
  * GET /xrpc/artist.getProfile?user_id=...
- * Returns an artist's profile, including a public profile picture, and
- * also fetches associated albums and tracks.
+ * Returns an artist's profile including their public profile picture, associated albums, and tracks.
  */
 exports.getArtistProfile = async (req, res) => {
   try {
@@ -78,7 +80,8 @@ exports.getArtistProfile = async (req, res) => {
     if (!user_id) {
       return res.status(400).json({ error: "user_id is required" });
     }
-    // Fetch the artist profile information (joined with user_profiles and users).
+
+    // Fetch the artist profile information.
     const [rows] = await pool.query(
       `SELECT ap.*, up.profile_pic, u.username
        FROM artist_profiles ap 
@@ -87,41 +90,85 @@ exports.getArtistProfile = async (req, res) => {
        WHERE ap.user_id = ?`,
       [user_id]
     );
+
     if (!rows || rows.length === 0) {
       return res.status(404).json({ error: "Artist profile not found" });
     }
+
     const artistProfile = rows[0];
-    // Convert profile_pic URL.
     if (artistProfile.profile_pic) {
       artistProfile.profile_pic = buildImageUrl(req, artistProfile.profile_pic);
     }
     
-    // Fetch albums created by this artist.
+    // Fetch albums with track counts.
     const [albumRows] = await pool.query(
-      "SELECT id, title, artist, album_art FROM albums WHERE user_id = ?",
+      `SELECT a.id, a.title, a.artist, a.album_art, a.created_at,
+              COUNT(t.id) as track_count,
+              JSON_ARRAYAGG(
+                JSON_OBJECT(
+                  'id', t.id,
+                  'title', t.title,
+                  'artist', t.artist,
+                  'track_image', t.track_image,
+                  'file_path', t.file_path,
+                  'created_at', t.created_at,
+                  'album_id', t.album_id
+                )
+              ) as tracks
+       FROM albums a
+       LEFT JOIN tracks t ON a.id = t.album_id
+       WHERE a.user_id = ?
+       GROUP BY a.id`,
       [user_id]
     );
-    // Convert album_art URLs.
+
+    // Process each album and convert image paths to URLs.
     const albums = albumRows.map(album => {
       if (album.album_art) {
         album.album_art = buildImageUrl(req, album.album_art);
       }
-      return album;
+      let tracks = [];
+      try {
+        tracks = JSON.parse(album.tracks);
+      } catch (err) {
+        tracks = [];
+      }
+      // If the first track has a null id, reset to an empty array.
+      if (tracks.length > 0 && tracks[0].id === null) {
+        tracks = [];
+      } else {
+        tracks = tracks.map(track => ({
+          ...track,
+          track_image: track.track_image ? buildImageUrl(req, track.track_image) : null
+        }));
+      }
+      return {
+        id: album.id,
+        title: album.title,
+        artist: album.artist,
+        album_art: album.album_art,
+        created_at: album.created_at,
+        track_count: album.track_count,
+        tracks
+      };
     });
+
     artistProfile.albums = albums;
     
-    // Fetch tracks by this artist.
-    // (Assuming tracks are associated by matching the artist field to the user's username.)
+    // Fetch standalone tracks by this artist (tracks not associated with an album).
     const [trackRows] = await pool.query(
-      "SELECT id, title, artist, track_image FROM tracks WHERE artist = (SELECT username FROM users WHERE id = ?)",
+      `SELECT id, title, artist, track_image, created_at, album_id, file_path
+       FROM tracks 
+       WHERE artist = (SELECT username FROM users WHERE id = ?) 
+       AND album_id IS NULL`,
       [user_id]
     );
-    const tracks = trackRows.map(track => {
-      if (track.track_image) {
-        track.track_image = buildImageUrl(req, track.track_image);
-      }
-      return track;
-    });
+
+    const tracks = trackRows.map(track => ({
+      ...track,
+      track_image: track.track_image ? buildImageUrl(req, track.track_image) : null
+    }));
+
     artistProfile.tracks = tracks;
     
     res.json(artistProfile);
@@ -152,3 +199,4 @@ exports.updateArtistProfile = async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 };
+

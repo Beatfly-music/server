@@ -2,6 +2,7 @@
 const pool = require('../utils/db');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const nodemailer = require('nodemailer'); // NEW: Import Nodemailer
 require('dotenv').config();
 
 exports.register = async (req, res) => {
@@ -63,18 +64,48 @@ exports.getProfile = async (req, res) => {
   }
 };
 
-// NEW: Forgot Password endpoint
+// NEW: Forgot Password endpoint with email sending
 exports.forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: "Email is required" });
-    const [users] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
+    
+    const [users] = await pool.query('SELECT id, username FROM users WHERE email = ?', [email]);
     if (users.length === 0) return res.status(404).json({ error: "User not found" });
     const user = users[0];
+    
     // Generate a reset token (expires in 15 minutes)
     const resetToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '15m' });
-    // In a real system, send an email with this token.
-    res.json({ message: "Password reset token generated", resetToken });
+    
+    // Create a transporter using environment variables (configure these in your .env file)
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT),
+      secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
+    
+    // Construct a reset link – ensure CLIENT_URL is set in your .env (e.g., http://localhost:3000)
+    const resetLink = `${process.env.CLIENT_URL}/reset-password?token=${resetToken}`;
+    
+    // Send email with the reset link
+    const mailOptions = {
+      from: `"BeatFly Support" <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: "BeatFly - Password Reset Request",
+      text: `Hi ${user.username},\n\nYou requested a password reset. Click the link below to reset your password:\n\n${resetLink}\n\nIf you did not request this, please ignore this email.\n\nThanks,\nThe BeatFly Team`,
+      html: `<p>Hi ${user.username},</p>
+             <p>You requested a password reset. Click the link below to reset your password:</p>
+             <p><a href="${resetLink}">${resetLink}</a></p>
+             <p>If you did not request this, please ignore this email.</p>
+             <p>Thanks,<br>The BeatFly Team</p>`
+    };
+    
+    await transporter.sendMail(mailOptions);
+    res.json({ message: "Password reset email sent successfully" });
   } catch (error) {
     console.error("Forgot password error:", error);
     res.status(500).json({ error: "Internal server error" });
@@ -86,6 +117,7 @@ exports.resetPassword = async (req, res) => {
   try {
     const { token, newPassword } = req.body;
     if (!token || !newPassword) return res.status(400).json({ error: "Token and new password are required" });
+    
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     await pool.query('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, payload.id]);

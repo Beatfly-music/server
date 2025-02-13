@@ -21,7 +21,7 @@ router.delete('/music/playlist.removeTrack', authenticateToken, playlistControll
 // Get all playlists.
 router.get('/music/playlists', authenticateToken, playlistController.getPlaylists);
 
-// Get a single playlist by ID.
+//               Get a single playlist by ID.
 router.get('/music/playlist/:playlistId', authenticateToken, playlistController.getPlaylist);
 
 module.exports = router;

@@ -79,7 +79,8 @@ exports.createAlbum = async (req, res) => {
       return res.status(400).json({ error: "User not found" });
     }
 
-    const { title, artist, description } = req.body;
+    // Extract album details from the request body.
+    const { title, artist, description, isExplicit } = req.body;
     if (!title || !artist) {
       return res.status(400).json({ error: "Album title and artist are required." });
     }
@@ -94,10 +95,13 @@ exports.createAlbum = async (req, res) => {
       albumArtPath = cleanedPath;
     }
     
-    // Insert album record into the database.
+    // Determine the explicit flag.
+    const explicitFlag = isExplicit === 'true' || isExplicit === true ? 1 : 0;
+    
+    // Insert album record into the database (including isExplicit).
     const [albumResult] = await pool.query(
-      'INSERT INTO albums (title, artist, description, album_art, user_id) VALUES (?, ?, ?, ?, ?)',
-      [title, artist, description || '', albumArtPath, req.user.id]
+      'INSERT INTO albums (title, artist, description, album_art, isExplicit, user_id) VALUES (?, ?, ?, ?, ?, ?)',
+      [title, artist, description || '', albumArtPath, explicitFlag, req.user.id]
     );
     const albumId = albumResult.insertId;
     
@@ -167,14 +171,27 @@ exports.createAlbum = async (req, res) => {
 exports.editAlbum = async (req, res) => {
   try {
     const albumId = req.params.albumId;
-    const { title, artist, description } = req.body;
+    // Extract album details from the request body.
+    const { title, artist, description, isExplicit } = req.body;
     const [albums] = await pool.query("SELECT * FROM albums WHERE id = ? AND user_id = ?", [albumId, req.user.id]);
     if (!albums || albums.length === 0) {
       return res.status(404).json({ error: "Album not found or not owned by you." });
     }
+    
+    // Determine the new explicit flag.
+    const newExplicit = (isExplicit !== undefined)
+      ? (isExplicit === 'true' || isExplicit === true ? 1 : 0)
+      : albums[0].isExplicit;
+    
     await pool.query(
-      "UPDATE albums SET title = ?, artist = ?, description = ? WHERE id = ?",
-      [title || albums[0].title, artist || albums[0].artist, description || albums[0].description, albumId]
+      "UPDATE albums SET title = ?, artist = ?, description = ?, isExplicit = ? WHERE id = ?",
+      [
+        title || albums[0].title,
+        artist || albums[0].artist,
+        description || albums[0].description,
+        newExplicit,
+        albumId
+      ]
     );
     res.json({ message: "Album updated successfully" });
   } catch (error) {
@@ -201,4 +218,4 @@ exports.deleteAlbum = async (req, res) => {
     console.error(error.stack);
     res.status(500).json({ error: "Internal server error", details: error.message });   
   }
-  };
+};
