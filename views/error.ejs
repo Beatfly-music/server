@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Error</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f8f8f8;
+      color: #333;
+    }
+    .error-container {
+      max-width: 600px;
+      margin: 40px auto;
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .error-title {
+      color: #dc3545;
+      margin-top: 0;
+    }
+    .error-message {
+      color: #666;
+      margin-bottom: 20px;
+    }
+    .error-details {
+      background: #f8f8f8;
+      padding: 15px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 0.9em;
+    }
+    .back-link {
+      display: inline-block;
+      margin-top: 20px;
+      color: #007bff;
+      text-decoration: none;
+    }
+    .back-link:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="error-container">
+    <h1 class="error-title">Error</h1>
+    <p class="error-message">
+      <% if (env === 'development') { %>
+        <%= error.message %>
+      <% } else { %>
+        An error occurred while processing your request.
+      <% } %>
+    </p>
+    <% if (env === 'development') { %>
+      <div class="error-details">
+        <strong>Path:</strong> <%= method %> <%= path %><br>
+        <strong>Time:</strong> <%= time %><br>
+        <strong>Request ID:</strong> <%= requestId %><br>
+        <strong>Stack:</strong><br>
+        <%= error.stack.replace(/\n/g, '<br>') %>
+      </div>
+    <% } %>
+    <a href="/" class="back-link">← Back to Home</a>
+  </div>
+</body>
+</html>

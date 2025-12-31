@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Server Monitor</title>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
+  <style>
+    body { 
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background: #f0f0f0;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+    .chart, .panel {
+      background: white;
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .panel { margin-bottom: 20px; }
+    .logs {
+      height: 300px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 12px;
+      background: #f8f8f8;
+      padding: 10px;
+      border-radius: 4px;
+    }
+    .log-entry {
+      padding: 5px;
+      border-bottom: 1px solid #eee;
+    }
+    .error-log {
+      color: #dc3545;
+      background: #fff5f5;
+    }
+    .logout-btn, .control-btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .logout-btn {
+      background: #dc3545;
+      color: white;
+    }
+    .logout-btn:hover { background: #c82333; }
+    .control-btn {
+      background: #007bff;
+      color: white;
+      margin-right: 10px;
+    }
+    .control-btn:hover { background: #0056b3; }
+    form label {
+      margin-right: 5px;
+    }
+    form input {
+      width: 80px;
+      margin-right: 10px;
+      padding: 5px;
+    }
+    form button {
+      background: #28a745;
+      color: white;
+      border: none;
+      padding: 5px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    form button:hover { background: #218838; }
+    .status-indicator {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 5px;
+    }
+    .status-good { background: #28a745; }
+    .status-warning { background: #ffc107; }
+    .status-error { background: #dc3545; }
+    #adminMessage { font-weight: bold; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Server Monitor</h1>
+    <form action="/monitor/logout" method="POST">
+      <button class="logout-btn">Logout</button>
+    </form>
+  </div>
+
+  <div class="grid">
+    <div class="chart">
+      <div id="cpuChart"></div>
+    </div>
+    <div class="chart">
+      <div id="memoryChart"></div>
+    </div>
+    <div class="chart">
+      <div id="requestsChart"></div>
+    </div>
+    <div class="chart">
+      <div id="latencyChart"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="systemInfo"></div>
+
+  <div class="panel">
+    <h2>Recent Errors</h2>
+    <div class="logs" id="errorLogs"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Recent Requests</h2>
+    <div class="logs" id="requestLogs"></div>
+  </div>
+
+  <!-- New Admin Controls Panel -->
+  <div class="panel" id="adminControls">
+    <h2>Admin Controls</h2>
+    <button class="control-btn" id="killButton">Emergency Kill Switch</button>
+    <button class="control-btn" id="gcButton">Trigger Garbage Collection</button>
+    <form id="thresholdForm" style="margin-top: 10px; display: inline-block;">
+      <label for="maxHeapUsage">Max Heap Usage (MB):</label>
+      <input type="number" id="maxHeapUsage" name="maxHeapUsage" min="1" value="500">
+      <label for="maxCpuLoad">Max CPU Load (%):</label>
+      <input type="number" id="maxCpuLoad" name="maxCpuLoad" min="1" max="100" value="80">
+      <button type="submit">Update Thresholds</button>
+    </form>
+    <div id="adminMessage"></div>
+  </div>
+
+  <script>
+    function updateDashboard() {
+      fetch('/metrics')
+        .then(res => {
+          if (!res.ok) {
+            if (res.status === 401) {
+              window.location.href = '/monitor/login';
+            }
+            throw new Error('Failed to fetch metrics');
+          }
+          return res.json();
+        })
+        .then(data => {
+          const timestamps = data.timestamp.map(t => moment(t).format('HH:mm:ss'));
+
+          // CPU Chart
+          Plotly.newPlot('cpuChart', [{
+            x: timestamps,
+            y: data.metrics.cpu,
+            name: 'CPU',
+            type: 'scatter',
+            line: { color: '#2196F3' }
+          }], {
+            title: 'CPU Usage (%)',
+            height: 300,
+            margin: { t: 30, r: 30, b: 30, l: 30 }
+          });
+
+          // Memory Chart
+          Plotly.newPlot('memoryChart', [{
+            x: timestamps,
+            y: data.metrics.memory,
+            name: 'Memory',
+            type: 'scatter',
+            line: { color: '#4CAF50' }
+          }], {
+            title: 'Memory Usage (MB)',
+            height: 300,
+            margin: { t: 30, r: 30, b: 30, l: 30 }
+          });
+
+          // Requests & Errors Chart
+          Plotly.newPlot('requestsChart', [
+            {
+              x: timestamps,
+              y: data.metrics.requests,
+              name: 'Requests',
+              type: 'scatter',
+              line: { color: '#9C27B0' }
+            },
+            {
+              x: timestamps,
+              y: data.metrics.errors,
+              name: 'Errors',
+              type: 'scatter',
+              line: { color: '#F44336' }
+            }
+          ], {
+            title: 'Requests & Errors',
+            height: 300,
+            margin: { t: 30, r: 30, b: 30, l: 30 }
+          });
+
+          // Latency Chart
+          Plotly.newPlot('latencyChart', [{
+            x: timestamps,
+            y: data.metrics.latency,
+            name: 'Latency',
+            type: 'scatter',
+            line: { color: '#FF9800' }
+          }], {
+            title: 'Average Latency (ms)',
+            height: 300,
+            margin: { t: 30, r: 30, b: 30, l: 30 }
+          });
+
+          // Update system info (including thresholds)
+          const { uptime } = data.systemInfo;
+          const memoryUsage = ((data.systemInfo.totalMemory - data.systemInfo.freeMemory) / data.systemInfo.totalMemory * 100).toFixed(1);
+          const statusClass = memoryUsage > 90 ? 'status-error' : memoryUsage > 70 ? 'status-warning' : 'status-good';
+
+          document.getElementById('systemInfo').innerHTML = `
+            <h2>System Information</h2>
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px;">
+              <div>
+                <p><strong>Uptime:</strong> ${uptime.days}d ${uptime.hours}h ${uptime.minutes}m ${uptime.seconds}s</p>
+                <p>
+                  <span class="status-indicator ${statusClass}"></span>
+                  <strong>Memory:</strong> ${(data.systemInfo.totalMemory / 1024 / 1024 / 1024).toFixed(2)}GB total,
+                  ${(data.systemInfo.freeMemory / 1024 / 1024 / 1024).toFixed(2)}GB free (${memoryUsage}% used)
+                </p>
+                <p><strong>CPU Cores:</strong> ${data.systemInfo.cpuCores}</p>
+              </div>
+              <div>
+                <p><strong>Platform:</strong> ${data.systemInfo.platform} ${data.systemInfo.release}</p>
+                <p><strong>Node Version:</strong> ${data.systemInfo.nodeVersion}</p>
+                <p><strong>Process ID:</strong> ${data.systemInfo.pid}</p>
+                <p><strong>Max Heap Usage:</strong> ${(data.systemInfo.maxHeapUsage / 1024 / 1024).toFixed(2)} MB</p>
+                <p><strong>Max CPU Load:</strong> ${(data.systemInfo.maxCpuLoad * 100).toFixed(0)}%</p>
+              </div>
+            </div>
+          `;
+
+          // Update error logs
+          const errorLogsHtml = data.recentErrors.map(error => 
+            `<div class="log-entry error-log">
+              <strong>${moment(error.timestamp).format('YYYY-MM-DD HH:mm:ss')}</strong>
+              ${error.path ? `[${error.method} ${error.path}]` : ''} ${error.message}
+            </div>`
+          ).join('');
+          document.getElementById('errorLogs').innerHTML = errorLogsHtml || '<div class="log-entry">No errors recorded</div>';
+
+          // Update request logs
+          const requestLogsHtml = data.recentRequests.map(req => 
+            `<div class="log-entry">
+              <strong>${moment(req.timestamp).format('YYYY-MM-DD HH:mm:ss')}</strong>
+              [${req.statusCode}] ${req.method} ${req.path} (${req.duration}ms)
+            </div>`
+          ).join('');
+          document.getElementById('requestLogs').innerHTML = requestLogsHtml || '<div class="log-entry">No requests recorded</div>';
+        })
+        .catch(err => {
+          console.error('Error updating dashboard:', err);
+        });
+    }
+
+    // Call updateDashboard immediately and every second thereafter
+    updateDashboard();
+    setInterval(updateDashboard, 1000);
+
+    // Admin Controls Handlers
+    document.getElementById('killButton').addEventListener('click', function() {
+      if (confirm('Are you sure you want to trigger an emergency kill? This will shut down the server.')) {
+        fetch('/monitor/kill', { method: 'POST' })
+          .then(response => response.json())
+          .then(data => alert(data.message))
+          .catch(err => alert('Error triggering kill switch'));
+      }
+    });
+
+    document.getElementById('gcButton').addEventListener('click', function() {
+      fetch('/monitor/gc', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => alert(data.message))
+        .catch(err => alert('Error triggering garbage collection'));
+    });
+
+    document.getElementById('thresholdForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      const maxHeapUsageMB = document.getElementById('maxHeapUsage').value;
+      const maxCpuLoadPercent = document.getElementById('maxCpuLoad').value;
+      fetch('/monitor/setThresholds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          maxHeapUsage: maxHeapUsageMB * 1024 * 1024, 
+          maxCpuLoad: maxCpuLoadPercent / 100 
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        document.getElementById('adminMessage').innerText = data.message;
+      })
+      .catch(err => {
+        document.getElementById('adminMessage').innerText = 'Error updating thresholds';
+      });
+    });
+  </script>
+</body>
+</html>

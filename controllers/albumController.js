@@ -3,49 +3,45 @@ const compressAudio = require('../utils/compressAudio');
 const removeExif = require('../utils/stripExif');
 const path = require('path');
 const fs = require('fs').promises;
+const crypto = require('crypto');
 
 /**
- * Helper function to build a public image URL.
- * It removes the "uploads/" prefix from the stored file path and then
- * returns a URL that uses the image route.
- *
- * Example:
- *   filePath: "uploads/albumArt/filename.jpg"
- *   returns: "http://localhost:5000/xrpc/images/albumArt/filename.jpg"
+ * Helper: Builds a public image URL from a file path.
  */
 function buildImageUrl(req, filePath) {
   if (!filePath) return "";
-  // Remove any leading "uploads/" (handling both forward and backslashes)
   const relative = filePath.replace(/^uploads[\/\\]/, '');
   return `${req.protocol}://${req.get('host')}/xrpc/images/${relative}`;
 }
 
 /**
- * Helper function to generate a random 10-digit album ID
- * that is unique within the albums table.
+ * Helper: Generate a random, unique 5-digit album ID.
  */
 const generateUniqueAlbumId = async () => {
   let unique = false;
   let id;
   while (!unique) {
-    // Generate a random 10-digit number.
     id = Math.floor(10000 + Math.random() * 90000);
     const [rows] = await pool.query('SELECT id FROM albums WHERE id = ?', [id]);
-    if (rows.length === 0) {
-      unique = true;
-    }
+    if (rows.length === 0) unique = true;
   }
   return id;
 };
 
 /**
- * Public endpoint to retrieve an album by ID along with its associated tracks
- * and uploader information.
+ * Helper: Sanitizes a file name by replacing problematic characters.
+ * (This is used only as a fallback if needed.)
+ */
+function sanitizeFilename(filename) {
+  return filename.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+}
+
+/**
+ * Retrieves an album along with its tracks and uploader info.
  */
 exports.getAlbum = async (req, res) => {
   try {
     const { albumId } = req.params;
-    // Fetch album info along with uploader details by joining the users table.
     const [albumRows] = await pool.query(
       `SELECT a.*, u.username AS uploader_username, u.email AS uploader_email, u.created_at AS uploader_created_at 
        FROM albums a
@@ -58,12 +54,10 @@ exports.getAlbum = async (req, res) => {
     }
     let album = albumRows[0];
     
-    // Convert album_art to a public URL if available.
     if (album.album_art) {
       album.album_art = buildImageUrl(req, album.album_art);
     }
     
-    // Fetch associated tracks.
     const [tracks] = await pool.query("SELECT * FROM tracks WHERE album_id = ?", [albumId]);
     album.tracks = tracks.map(track => {
       if (track.track_image) {
@@ -81,57 +75,56 @@ exports.getAlbum = async (req, res) => {
 };
 
 /**
- * Creates a new album along with processing uploaded album art and track files.
- * This endpoint requires authentication (req.user is assumed to be populated).
+ * Creates a new album with album art (optional tracks).
+ * Tracks can be added later using the addTrackToAlbum endpoint.
  */
 exports.createAlbum = async (req, res) => {
   try {
-    // Ensure we have an authenticated user.
+    // Ensure a valid user is present.
     if (!req.user || !req.user.id) {
       return res.status(401).json({ error: "Unauthorized: No valid user" });
     }
-
-    // Verify that the user exists in the database.
     const [userRows] = await pool.query("SELECT id FROM users WHERE id = ?", [req.user.id]);
     if (!userRows.length) {
       return res.status(400).json({ error: "User not found" });
     }
 
-    // Extract album details from the request body.
+    // Validate album data.
     const { title, artist, description, isExplicit } = req.body;
     if (!title || !artist) {
       return res.status(400).json({ error: "Album title and artist are required." });
     }
-    
-    // Process album art if provided.
+
+    // Process album art (strip Exif data) if provided.
     let albumArtPath = null;
     if (req.files && req.files.albumArt && req.files.albumArt.length > 0) {
+      // Use the already-sanitized file saved by Multer.
       albumArtPath = req.files.albumArt[0].path;
       const parsedArt = path.parse(albumArtPath);
       const cleanedPath = path.join(parsedArt.dir, `${parsedArt.name}-cleaned${parsedArt.ext}`);
       await removeExif(albumArtPath, cleanedPath);
       albumArtPath = cleanedPath;
     }
-    
-    // Determine the explicit flag.
+
     const explicitFlag = isExplicit === 'true' || isExplicit === true ? 1 : 0;
-    
-    // Generate a unique album ID.
     const albumId = await generateUniqueAlbumId();
-    
-    // Insert album record into the database (including isExplicit and the generated album ID).
+
     await pool.query(
       'INSERT INTO albums (id, title, artist, description, album_art, isExplicit, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [albumId, title, artist, description || '', albumArtPath, explicitFlag, req.user.id]
     );
-    
-    // Process uploaded track files.
+
+    // Process track files if they're included (supporting backward compatibility)
     const trackFiles = req.files && req.files.tracks ? req.files.tracks : [];
+    // Optional track titles, artists, and lyrics.
     let trackTitles = req.body.trackTitles;
     let trackArtists = req.body.trackArtists;
+    let trackLyrics = req.body.trackLyrics;
     if (trackTitles && !Array.isArray(trackTitles)) trackTitles = [trackTitles];
     if (trackArtists && !Array.isArray(trackArtists)) trackArtists = [trackArtists];
-    
+    if (trackLyrics && !Array.isArray(trackLyrics)) trackLyrics = [trackLyrics];
+
+    // Ensure our output directory exists.
     const outputDir = path.join('uploads', 'compressed');
     try {
       await fs.mkdir(outputDir, { recursive: true });
@@ -139,32 +132,40 @@ exports.createAlbum = async (req, res) => {
       console.error("Error creating output directory:", err.message);
       console.error(err.stack);
     }
-    
-    // For each uploaded track file, compress and insert it.
+
+    // Loop through each track file if present.
     for (let i = 0; i < trackFiles.length; i++) {
       const file = trackFiles[i];
-      const filename = path.basename(file.path);
-      const parsedTrack = path.parse(filename);
-      const outputPath = path.join(outputDir, `${parsedTrack.name}-compressed${parsedTrack.ext}`);
-      
+      // Use file.filename (set by the file upload middleware) if available,
+      // otherwise fallback to originalname.
+      const originalName = file.filename || file.originalname;
+      // Sanitize the base name in case the middleware didn't cover it.
+      const parsed = path.parse(originalName);
+      const safeBaseName = sanitizeFilename(parsed.name);
+      const uniqueSuffix = Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+      const outputFileName = `${safeBaseName}-${uniqueSuffix}${parsed.ext}`;
+      const outputPath = path.join(outputDir, outputFileName);
+
       await compressAudio(file.path, outputPath);
-      
       try {
         await fs.stat(outputPath);
       } catch (err) {
         console.error("Compressed file not found:", outputPath, err.message);
         console.error(err.stack);
       }
-      
-      const trackTitle = (trackTitles && trackTitles[i]) ? trackTitles[i] : file.originalname;
+
+      // Use provided track title/artist if available; default to safeBaseName or album artist.
+      const trackTitle = (trackTitles && trackTitles[i]) ? trackTitles[i] : safeBaseName;
       const trackArtist = (trackArtists && trackArtists[i]) ? trackArtists[i] : artist;
+      const lyrics = (trackLyrics && trackLyrics[i]) ? trackLyrics[i] : "";
+
       await pool.query(
-        'INSERT INTO tracks (album_id, title, artist, file_path) VALUES (?, ?, ?, ?)',
-        [albumId, trackTitle, trackArtist, outputPath]
+        'INSERT INTO tracks (album_id, title, artist, file_path, lyrics) VALUES (?, ?, ?, ?, ?)',
+        [albumId, trackTitle, trackArtist, outputPath, lyrics]
       );
     }
-    
-    // Automatically create an artist profile if not already present.
+
+    // Automatically create an artist profile if none exists.
     const [artistProfiles] = await pool.query("SELECT * FROM artist_profiles WHERE user_id = ?", [req.user.id]);
     if (!artistProfiles || artistProfiles.length === 0) {
       await pool.query(
@@ -172,11 +173,11 @@ exports.createAlbum = async (req, res) => {
         [req.user.id, req.user.username, ""]
       );
     }
-    
-    // Retrieve the first inserted track ID.
+
+    // Get first track id (if any) for response.
     const [trackRows] = await pool.query("SELECT id FROM tracks WHERE album_id = ? LIMIT 1", [albumId]);
     const firstTrackId = trackRows.length > 0 ? trackRows[0].id : null;
-    
+
     res.status(201).json({ message: "Album created successfully", albumId, trackId: firstTrackId });
   } catch (error) {
     console.error("Create album error:", error.message);
@@ -186,33 +187,150 @@ exports.createAlbum = async (req, res) => {
 };
 
 /**
- * Updates an album. Only the owner (authenticated user) may update.
+ * Adds a new track to an existing album.
+ * FIXED to work with upload.fields middleware
+ */
+exports.addTrackToAlbum = async (req, res) => {
+  try {
+    const { albumId } = req.params;
+    const { title, artist, lyrics } = req.body;
+    
+    console.log("Received track upload request for album:", albumId);
+    console.log("Request body:", req.body);
+    console.log("Request files:", req.files);
+    
+    // Verify the album exists and belongs to this user
+    const [albums] = await pool.query("SELECT * FROM albums WHERE id = ? AND user_id = ?", [albumId, req.user.id]);
+    if (!albums || albums.length === 0) {
+      return res.status(404).json({ error: "Album not found or not owned by you." });
+    }
+    const album = albums[0];
+
+    // Check for file in req.files.trackFile since we're using upload.fields
+    if (!req.files || !req.files.trackFile || !req.files.trackFile.length) {
+      return res.status(400).json({ error: "No track file provided." });
+    }
+    
+    // Use the first file from trackFile array
+    const file = req.files.trackFile[0];
+    console.log("Processing track file:", file.originalname, "size:", file.size);
+
+    // Ensure our output directory exists
+    const outputDir = path.join('uploads', 'compressed');
+    try {
+      await fs.mkdir(outputDir, { recursive: true });
+    } catch (err) {
+      console.error("Error creating output directory:", err.message);
+      console.error(err.stack);
+    }
+
+    // Process the uploaded track file
+    const originalName = file.filename || file.originalname;
+    const parsed = path.parse(originalName);
+    const safeBaseName = sanitizeFilename(parsed.name);
+    const uniqueSuffix = Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+    const outputFileName = `${safeBaseName}-${uniqueSuffix}${parsed.ext}`;
+    const outputPath = path.join(outputDir, outputFileName);
+
+    console.log("Compressing audio file to:", outputPath);
+    // Compress the audio file
+    await compressAudio(file.path, outputPath);
+    try {
+      await fs.stat(outputPath);
+    } catch (err) {
+      console.error("Compressed file not found:", outputPath, err.message);
+      console.error(err.stack);
+      return res.status(500).json({ error: "Failed to compress audio file." });
+    }
+
+    // Use provided track title/artist if available; default to filename or album artist
+    const trackTitle = title || safeBaseName;
+    const trackArtist = artist || album.artist;
+
+    console.log("Saving track to database:", trackTitle, "by", trackArtist);
+    // Save track to database
+    const [result] = await pool.query(
+      'INSERT INTO tracks (album_id, title, artist, file_path, lyrics) VALUES (?, ?, ?, ?, ?)',
+      [albumId, trackTitle, trackArtist, outputPath, lyrics || ""]
+    );
+    
+    // Get the ID of the newly created track
+    const trackId = result.insertId;
+
+    // Process track image if provided
+    let trackImagePath = null;
+    if (req.files && req.files.trackImage && req.files.trackImage.length > 0) {
+      trackImagePath = req.files.trackImage[0].path;
+      const parsedImage = path.parse(trackImagePath);
+      const cleanedPath = path.join(parsedImage.dir, `${parsedImage.name}-cleaned${parsedImage.ext}`);
+      await removeExif(trackImagePath, cleanedPath);
+      trackImagePath = cleanedPath;
+      
+      // Update the track with the image path
+      await pool.query("UPDATE tracks SET track_image = ? WHERE id = ?", [trackImagePath, trackId]);
+    }
+
+    console.log("Track added successfully:", trackId);
+    res.status(201).json({ 
+      message: "Track added successfully", 
+      trackId,
+      title: trackTitle,
+      artist: trackArtist
+    });
+  } catch (error) {
+    console.error("Add track error:", error.message);
+    console.error(error.stack);
+    res.status(500).json({ error: "Internal server error", details: error.message });
+  }
+};
+
+/**
+ * Updates an album. Supports updating album art and track lyrics.
  */
 exports.editAlbum = async (req, res) => {
   try {
     const albumId = req.params.albumId;
-    // Extract album details from the request body.
     const { title, artist, description, isExplicit } = req.body;
     const [albums] = await pool.query("SELECT * FROM albums WHERE id = ? AND user_id = ?", [albumId, req.user.id]);
     if (!albums || albums.length === 0) {
       return res.status(404).json({ error: "Album not found or not owned by you." });
     }
-    
-    // Determine the new explicit flag.
+    const album = albums[0];
+
+    // Process new album art if provided.
+    let newAlbumArtPath = album.album_art;
+    if (req.files && req.files.albumArt && req.files.albumArt.length > 0) {
+      newAlbumArtPath = req.files.albumArt[0].path;
+      const parsedArt = path.parse(newAlbumArtPath);
+      const cleanedPath = path.join(parsedArt.dir, `${parsedArt.name}-cleaned${parsedArt.ext}`);
+      await removeExif(newAlbumArtPath, cleanedPath);
+      newAlbumArtPath = cleanedPath;
+      if (album.album_art && album.album_art !== newAlbumArtPath) {
+        try {
+          await fs.unlink(album.album_art);
+        } catch (err) {
+          console.error("Error deleting old album art:", err.message);
+        }
+      }
+    }
+
     const newExplicit = (isExplicit !== undefined)
       ? (isExplicit === 'true' || isExplicit === true ? 1 : 0)
-      : albums[0].isExplicit;
-    
+      : album.isExplicit;
+
     await pool.query(
-      "UPDATE albums SET title = ?, artist = ?, description = ?, isExplicit = ? WHERE id = ?",
-      [
-        title || albums[0].title,
-        artist || albums[0].artist,
-        description || albums[0].description,
-        newExplicit,
-        albumId
-      ]
+      "UPDATE albums SET title = ?, artist = ?, description = ?, isExplicit = ?, album_art = ? WHERE id = ?",
+      [title || album.title, artist || album.artist, description || album.description, newExplicit, newAlbumArtPath, albumId]
     );
+
+    // Update track lyrics if provided.
+    if (req.body.trackLyrics) {
+      const trackLyrics = req.body.trackLyrics;
+      for (const [trackId, lyrics] of Object.entries(trackLyrics)) {
+        await pool.query("UPDATE tracks SET lyrics = ? WHERE id = ? AND album_id = ?", [lyrics, trackId, albumId]);
+      }
+    }
+
     res.json({ message: "Album updated successfully" });
   } catch (error) {
     console.error("Edit album error:", error.message);
@@ -222,7 +340,7 @@ exports.editAlbum = async (req, res) => {
 };
 
 /**
- * Deletes an album. Only the owner (authenticated user) may delete.
+ * Deletes an album along with its associated track and album art files.
  */
 exports.deleteAlbum = async (req, res) => {
   try {
@@ -231,11 +349,113 @@ exports.deleteAlbum = async (req, res) => {
     if (!albums || albums.length === 0) {
       return res.status(404).json({ error: "Album not found or not owned by you." });
     }
+    const album = albums[0];
+
+    // Get all tracks for this album
+    const [tracks] = await pool.query("SELECT * FROM tracks WHERE album_id = ?", [albumId]);
+    
+    // Delete entries in streaming_sessions that reference these tracks
+    if (tracks.length > 0) {
+      const trackIds = tracks.map(track => track.id);
+      await pool.query(
+        "DELETE FROM streaming_sessions WHERE track_id IN (?)",
+        [trackIds]
+      );
+    }
+
+    // Now it's safe to delete the track files and records
+    for (const track of tracks) {
+      if (track.file_path) {
+        try {
+          await fs.unlink(track.file_path);
+          console.log(`Deleted track file: ${track.file_path}`);
+        } catch (err) {
+          console.error(`Error deleting track file (${track.file_path}):`, err.message);
+        }
+      }
+      if (track.track_image) {
+        try {
+          await fs.unlink(track.track_image);
+          console.log(`Deleted track image: ${track.track_image}`);
+        } catch (err) {
+          console.error(`Error deleting track image (${track.track_image}):`, err.message);
+        }
+      }
+    }
+
+    // Delete track records
+    await pool.query("DELETE FROM tracks WHERE album_id = ?", [albumId]);
+
+    // Delete album art
+    if (album.album_art) {
+      try {
+        await fs.unlink(album.album_art);
+        console.log(`Deleted album art: ${album.album_art}`);
+      } catch (err) {
+        console.error(`Error deleting album art (${album.album_art}):`, err.message);
+      }
+    }
+
+    // Finally, delete the album record
     await pool.query("DELETE FROM albums WHERE id = ?", [albumId]);
-    res.json({ message: "Album deleted successfully" });
+    res.json({ message: "Album and associated files deleted successfully" });
   } catch (error) {
     console.error("Delete album error:", error.message);
     console.error(error.stack);
-    res.status(500).json({ error: "Internal server error", details: error.message });   
+    res.status(500).json({ error: "Internal server error", details: error.message });
+  }
+};
+
+/**
+ * Deletes a track from an album.
+ */
+exports.deleteTrack = async (req, res) => {
+  try {
+    const { albumId, trackId } = req.params;
+    
+    // Verify the album exists and belongs to this user
+    const [albums] = await pool.query("SELECT * FROM albums WHERE id = ? AND user_id = ?", [albumId, req.user.id]);
+    if (!albums || albums.length === 0) {
+      return res.status(404).json({ error: "Album not found or not owned by you." });
+    }
+    
+    // Fetch track info
+    const [tracks] = await pool.query("SELECT * FROM tracks WHERE id = ? AND album_id = ?", [trackId, albumId]);
+    if (!tracks || tracks.length === 0) {
+      return res.status(404).json({ error: "Track not found or doesn't belong to this album." });
+    }
+    const track = tracks[0];
+    
+    // Delete entries in streaming_sessions that reference this track
+    await pool.query("DELETE FROM streaming_sessions WHERE track_id = ?", [trackId]);
+    
+    // Delete track file
+    if (track.file_path) {
+      try {
+        await fs.unlink(track.file_path);
+        console.log(`Deleted track file: ${track.file_path}`);
+      } catch (err) {
+        console.error(`Error deleting track file (${track.file_path}):`, err.message);
+      }
+    }
+    
+    // Delete track image if present
+    if (track.track_image) {
+      try {
+        await fs.unlink(track.track_image);
+        console.log(`Deleted track image: ${track.track_image}`);
+      } catch (err) {
+        console.error(`Error deleting track image (${track.track_image}):`, err.message);
+      }
+    }
+    
+    // Delete track from database
+    await pool.query("DELETE FROM tracks WHERE id = ?", [trackId]);
+    
+    res.json({ message: "Track deleted successfully" });
+  } catch (error) {
+    console.error("Delete track error:", error.message);
+    console.error(error.stack);
+    res.status(500).json({ error: "Internal server error", details: error.message });
   }
 };

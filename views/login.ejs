@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Monitor Login</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background: #f0f0f0;
+    }
+    .login-form {
+      background: white;
+      padding: 2rem;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    input {
+      display: block;
+      margin: 10px 0;
+      padding: 8px;
+      width: 200px;
+    }
+    button {
+      background: #007bff;
+      color: white;
+      border: none;
+      padding: 10px;
+      border-radius: 4px;
+      width: 100%;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #0056b3;
+    }
+    .error {
+      color: red;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-form">
+    <h2>Monitor Login</h2>
+    <form action="/monitor/login" method="POST">
+      <input type="password" name="password" placeholder="Password" required>
+      <button type="submit">Login</button>
+      <% if (error) { %>
+        <p class="error">Invalid password</p>
+      <% } %>
+    </form>
+  </div>
+</body>
+</html>

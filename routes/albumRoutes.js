@@ -33,8 +33,34 @@ router.post(
   albumController.createAlbum
 );
 
-// Edit and delete endpoints (require authentication).
-router.put('/music/album.edit/:albumId', authenticateToken, albumController.editAlbum);
+// Add a track to an existing album (requires authentication).
+// Changed from upload.fields to upload.single to match controller's expectation
+router.post(
+  '/music/album/:albumId/track.add',
+  authenticateToken,
+  upload.fields([
+    { name: 'trackFile', maxCount: 1 },
+    { name: 'trackImage', maxCount: 1 }
+  ]),
+  albumController.addTrackToAlbum
+);
+
+// Delete a track from an album (requires authentication).
+router.delete(
+  '/music/album/:albumId/track/:trackId',
+  authenticateToken,
+  albumController.deleteTrack
+);
+
+// Edit and delete album endpoints (require authentication).
+router.put(
+  '/music/album.edit/:albumId', 
+  authenticateToken, 
+  upload.fields([
+    { name: 'albumArt', maxCount: 1 }
+  ]),
+  albumController.editAlbum
+);
 router.delete('/music/album.delete/:albumId', authenticateToken, albumController.deleteAlbum);
 
 // PUBLIC endpoint: Get album details.
