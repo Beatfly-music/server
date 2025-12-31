@@ -129,3 +129,104 @@ ALTER TABLE albums
 ADD COLUMN isExplicit TINYINT(1) DEFAULT 0;
 
 ALTER TABLE tracks ADD COLUMN lyrics VARCHAR(255) DEFAULT "";
+
+-- 12. User Settings: Preferences for normal users.
+CREATE TABLE IF NOT EXISTS user_settings (
+  user_id INT PRIMARY KEY,
+  allow_explicit TINYINT(1) DEFAULT 1,
+  autoplay TINYINT(1) DEFAULT 1,
+  share_activity TINYINT(1) DEFAULT 1,
+  theme VARCHAR(50) DEFAULT 'system',
+  language VARCHAR(10) DEFAULT 'en',
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- 13. Disliked Tracks: Tracks a user has marked as disliked.
+CREATE TABLE IF NOT EXISTS disliked_tracks (
+  user_id INT NOT NULL,
+  track_id INT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, track_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- 14. Blocked Artists: Artists a user has blocked.
+CREATE TABLE IF NOT EXISTS blocked_artists (
+  user_id INT NOT NULL,
+  artist_id INT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, artist_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (artist_id) REFERENCES artist_profiles(user_id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- 15. Playback Positions: Tracks and timestamps where users last left off.
+CREATE TABLE IF NOT EXISTS playback_positions (
+  user_id INT PRIMARY KEY,
+  track_id INT NOT NULL,
+  position_seconds INT DEFAULT 0,
+  is_paused TINYINT(1) DEFAULT 0,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- 16. Admin flag for users
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin TINYINT(1) DEFAULT 0 AFTER password;
+
+-- 17. Year In Review Snapshots: Stores generated year in review data (one per user per year)
+CREATE TABLE IF NOT EXISTS year_in_review_snapshots (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  year INT NOT NULL,
+  playlist_id INT DEFAULT NULL,
+  snapshot_data JSON NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY unique_user_year (user_id, year),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- 18. Banned Users: Users banned by admins
+CREATE TABLE IF NOT EXISTS banned_users (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL UNIQUE,
+  reason TEXT,
+  banned_by INT NOT NULL,
+  banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMP NULL DEFAULT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (banned_by) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- 19. Banned Artists: Artist profiles banned by admins
+CREATE TABLE IF NOT EXISTS banned_artists (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  artist_id INT NOT NULL UNIQUE,
+  reason TEXT,
+  banned_by INT NOT NULL,
+  banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMP NULL DEFAULT NULL,
+  FOREIGN KEY (artist_id) REFERENCES artist_profiles(user_id) ON DELETE CASCADE,
+  FOREIGN KEY (banned_by) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- 20. Artist Reports: Reports submitted by users against artists
+CREATE TABLE IF NOT EXISTS artist_reports (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  artist_id INT NOT NULL,
+  reporter_id INT NOT NULL,
+  category VARCHAR(100) NOT NULL,
+  description TEXT,
+  status ENUM('pending', 'reviewed', 'resolved', 'dismissed') DEFAULT 'pending',
+  reviewed_by INT DEFAULT NULL,
+  reviewed_at TIMESTAMP NULL DEFAULT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (artist_id) REFERENCES artist_profiles(user_id) ON DELETE CASCADE,
+  FOREIGN KEY (reporter_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL,
+  INDEX idx_artist_reports_status (status),
+  INDEX idx_artist_reports_artist (artist_id)
+) ENGINE=InnoDB;

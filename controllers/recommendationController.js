@@ -16,17 +16,24 @@ exports.getRecommendations = async (req, res) => {
     const [
       listenedRows,
       favTrackRows,
-      favArtistRows
+      favArtistRows,
+      dislikedRows,
+      blockedRows
     ] = await Promise.all([
       pool.query('SELECT DISTINCT track_id FROM listens WHERE user_id = ?', [userId]),
       pool.query('SELECT DISTINCT track_id FROM favourite_tracks WHERE user_id = ?', [userId]),
-      pool.query('SELECT DISTINCT artist_id FROM favourite_artists WHERE user_id = ?', [userId])
+      pool.query('SELECT DISTINCT artist_id FROM favourite_artists WHERE user_id = ?', [userId]),
+      pool.query('SELECT track_id FROM disliked_tracks WHERE user_id = ?', [userId]),
+      pool.query('SELECT artist_id FROM blocked_artists WHERE user_id = ?', [userId])
     ]);
 
     const listenedTrackIds = listenedRows[0].map(row => row.track_id);
     const favTrackIds = favTrackRows[0].map(row => row.track_id);
     const userTrackIdsSet = new Set([...listenedTrackIds, ...favTrackIds]);
     const userTrackIds = Array.from(userTrackIdsSet);
+    const dislikedTrackIds = dislikedRows[0].map(row => row.track_id);
+    const blockedArtistIds = blockedRows[0].map(row => row.artist_id);
+    const excludedTrackIds = Array.from(new Set([...userTrackIds, ...dislikedTrackIds]));
 
     // Get favorite artist names if any.
     let favArtistNames = [];
@@ -37,6 +44,15 @@ exports.getRecommendations = async (req, res) => {
         [favArtistIds]
       );
       favArtistNames = artistProfiles.map(row => row.stage_name);
+    }
+
+    let blockedArtistNames = [];
+    if (blockedArtistIds.length) {
+      const [blockedProfiles] = await pool.query(
+        'SELECT stage_name FROM artist_profiles WHERE user_id IN (?)',
+        [blockedArtistIds]
+      );
+      blockedArtistNames = blockedProfiles.map(row => row.stage_name);
     }
 
     // ------------------------------------------------------
@@ -60,7 +76,7 @@ exports.getRecommendations = async (req, res) => {
 
     // If no similar users are found, immediately use the fallback.
     if (!similarUserIds.length) {
-      const fallback = await fallbackRecommendations(userTrackIds);
+      const fallback = await fallbackRecommendations(userTrackIds, dislikedTrackIds, blockedArtistNames);
       return res.status(200).json(fallback);
     }
 
@@ -76,7 +92,7 @@ exports.getRecommendations = async (req, res) => {
          GROUP BY track_id`,
         [
           similarUserIds,
-          userTrackIds.length ? userTrackIds : [0]
+          excludedTrackIds.length ? excludedTrackIds : [0]
         ]
       ),
       pool.query(
@@ -87,7 +103,7 @@ exports.getRecommendations = async (req, res) => {
          GROUP BY track_id`,
         [
           similarUserIds,
-          userTrackIds.length ? userTrackIds : [0]
+          excludedTrackIds.length ? excludedTrackIds : [0]
         ]
       )
     ]);
@@ -122,7 +138,12 @@ exports.getRecommendations = async (req, res) => {
           candidateScores[track.id] += 5; // bonus points
         }
       });
-      recommendations = tracks.map(track => ({
+      const filteredTracks = tracks.filter(track => {
+        const blocked = blockedArtistNames.includes(track.artist);
+        const disliked = dislikedTrackIds.includes(track.id);
+        return !blocked && !disliked;
+      });
+      recommendations = filteredTracks.map(track => ({
         ...track,
         score: candidateScores[track.id]
       }));
@@ -133,7 +154,7 @@ exports.getRecommendations = async (req, res) => {
     // 6. Fallback: if no recommendations, get random recommendations.
     // ------------------------------------------------------
     if (!recommendations.length) {
-      const fallback = await fallbackRecommendations(userTrackIds);
+      const fallback = await fallbackRecommendations(userTrackIds, dislikedTrackIds, blockedArtistNames);
       return res.status(200).json(fallback);
     }
 
@@ -145,8 +166,9 @@ exports.getRecommendations = async (req, res) => {
 };
 
 // Helper function: Fallback to random recommendations (tracks & albums)
-const fallbackRecommendations = async (userTrackIds) => {
+const fallbackRecommendations = async (userTrackIds, dislikedTrackIds = [], blockedArtistNames = []) => {
   try {
+    const exclusionList = Array.from(new Set([...(userTrackIds || []), ...(dislikedTrackIds || [])]));
     // Random tracks not in user's interactions.
     const [randomTracks] = await pool.query(
       `SELECT t.*, a.title AS album_title, a.album_art
@@ -154,7 +176,7 @@ const fallbackRecommendations = async (userTrackIds) => {
        LEFT JOIN albums a ON t.album_id = a.id
        WHERE t.id NOT IN (?)
        ORDER BY RAND() LIMIT 10`,
-      [userTrackIds.length ? userTrackIds : [0]]
+      [exclusionList.length ? exclusionList : [0]]
     );
     // Random albums not favorited by user.
     const [randomAlbums] = await pool.query(
@@ -165,7 +187,8 @@ const fallbackRecommendations = async (userTrackIds) => {
        ORDER BY RAND() LIMIT 5`,
       [userTrackIds.length ? userTrackIds[0] : 0] // dummy value if none exists
     );
-    return { tracks: randomTracks, albums: randomAlbums };
+    const filteredTracks = randomTracks.filter(track => !blockedArtistNames.includes(track.artist));
+    return { tracks: filteredTracks, albums: randomAlbums };
   } catch (error) {
     console.error('Fallback recommendation error:', error);
     return { tracks: [], albums: [] };

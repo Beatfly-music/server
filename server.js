@@ -7,6 +7,7 @@ const path = require('path');
 const fs = require('fs');
 const session = require('express-session');
 const os = require('os');
+const initSocket = require('./utils/socket');
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -340,7 +341,10 @@ const routes = {
   search: require('./routes/searchRoutes'),
   track: require('./routes/trackRoutes'),
   image: require('./routes/imageRoutes'),
-  featured: require('./routes/featuredRoutes')
+  featured: require('./routes/featuredRoutes'),
+  user: require('./routes/userRoutes'),
+  admin: require('./routes/adminRoutes'),
+  report: require('./routes/reportRoutes')
 };
 
 Object.entries(routes).forEach(([name, router]) => {
@@ -375,6 +379,10 @@ const server = app.listen(port, () => {
   console.log(`Server running on port ${port} (pid: ${process.pid})`);
   logger.info(`Server started on port ${port} (pid: ${process.pid})`);
 });
+
+// Initialize websocket server for playback syncing
+const io = initSocket(server);
+app.set('io', io);
 
 process.on('SIGTERM', () => {
   console.log('SIGTERM received. Shutting down gracefully...');
